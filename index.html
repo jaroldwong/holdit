@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hold It</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      padding: 1.5rem;
+      font-family: system-ui, sans-serif;
+      text-align: center;
+      background: #f4f4f5;
+      color: #18181b;
+      transition: background-color 0.3s;
+    }
+    body.hold { background: #dcfce7; }
+    body.rest { background: #dbeafe; }
+    p, h1 { margin: 0; }
+    #progress { color: #52525b; }
+    #exercise { font-size: 2.5rem; }
+    #reps { font-size: 1.5rem; }
+    #phase {
+      font-size: 1.25rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    #timer {
+      font-size: clamp(5rem, 25vw, 10rem);
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+    }
+    .controls { display: flex; gap: 0.75rem; }
+    button {
+      min-width: 6rem;
+      padding: 0.75rem 1.5rem;
+      border: none;
+      border-radius: 0.5rem;
+      font-size: 1.25rem;
+      background: #18181b;
+      color: #fff;
+      cursor: pointer;
+    }
+    button.secondary { background: #e4e4e7; color: #18181b; }
+  </style>
+</head>
+<body>
+  <p id="progress"></p>
+  <h1 id="exercise"></h1>
+  <p id="reps"></p>
+  <p id="phase" role="status" aria-live="polite"></p>
+  <div id="timer"></div>
+  <div class="controls">
+    <button id="toggle"></button>
+    <button id="skip" class="secondary">Skip</button>
+    <button id="reset" class="secondary">Reset</button>
+  </div>
+
+  <script>
+    // Edit this list to change the routine. Times are in seconds.
+    const ROUTINE = [
+      { name: "Wall sit", reps: 3, hold: 20, rest: 15 },
+      { name: "Plank", reps: 3, hold: 20, rest: 15 },
+      { name: "Glute bridge hold", reps: 3, hold: 20, rest: 15 },
+      { name: "Superman hold", reps: 3, hold: 20, rest: 15 },
+      { name: "Wall push-up hold", reps: 3, hold: 20, rest: 15 },
+    ];
+    const GET_READY = 5;
+
+    const el = (id) => document.getElementById(id);
+    let exIndex, rep, phase, remaining, endTime, timerId, audio, wakeLock;
+
+    function setPhase(p) {
+      phase = p;
+      const ex = ROUTINE[exIndex];
+      const seconds = { ready: GET_READY, hold: ex.hold, rest: ex.rest, done: 0 }[p];
+      remaining = seconds * 1000;
+      endTime = Date.now() + remaining;
+      render();
+    }
+
+    function advance() {
+      const ex = ROUTINE[exIndex];
+      if (phase === "ready") {
+        setPhase("hold");
+      } else if (phase === "rest") {
+        rep++;
+        setPhase("hold");
+      } else if (phase === "hold") {
+        if (rep + 1 < ex.reps) {
+          setPhase("rest");
+        } else if (exIndex + 1 < ROUTINE.length) {
+          exIndex++;
+          rep = 0;
+          setPhase("ready");
+        } else {
+          stop();
+          setPhase("done");
+        }
+      }
+      beep();
+    }
+
+    function tick() {
+      remaining = endTime - Date.now();
+      if (remaining <= 0) advance();
+      else render();
+    }
+
+    function start() {
+      // Browsers only allow audio after a user action, so create it on Start.
+      if (!audio) audio = new AudioContext();
+      audio.resume();
+      endTime = Date.now() + remaining;
+      timerId = setInterval(tick, 100);
+      keepAwake();
+      render();
+    }
+
+    function pause() {
+      remaining = endTime - Date.now();
+      stop();
+      render();
+    }
+
+    function stop() {
+      clearInterval(timerId);
+      timerId = null;
+      wakeLock?.release();
+      wakeLock = null;
+    }
+
+    // Keeps the screen on while the timer runs. Browsers without the
+    // Wake Lock API throw here, and the page still works without it.
+    async function keepAwake() {
+      try {
+        wakeLock = await navigator.wakeLock.request("screen");
+        if (!timerId) stop(); // Paused before the lock was granted.
+      } catch {}
+    }
+
+    function reset() {
+      stop();
+      exIndex = 0;
+      rep = 0;
+      setPhase("ready");
+    }
+
+    function beep() {
+      if (!audio) return;
+      const osc = audio.createOscillator();
+      const gain = audio.createGain();
+      const t = audio.currentTime;
+      osc.frequency.value = phase === "hold" ? 880 : 440;
+      gain.gain.setValueAtTime(0.2, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+      osc.connect(gain).connect(audio.destination);
+      osc.start(t);
+      osc.stop(t + 0.25);
+    }
+
+    function render() {
+      const done = phase === "done";
+      const ex = ROUTINE[exIndex];
+      document.body.className = phase;
+      el("progress").textContent = done ? "" : `Exercise ${exIndex + 1} of ${ROUTINE.length}`;
+      el("exercise").textContent = done ? "Done!" : ex.name;
+      el("reps").textContent = done ? "Nice work." : `Rep ${rep + 1} of ${ex.reps}`;
+      el("phase").textContent = { ready: "Get ready", hold: "Hold", rest: "Rest", done: "" }[phase];
+      el("timer").textContent = done ? "" : Math.ceil(Math.max(remaining, 0) / 1000);
+      el("toggle").textContent = timerId ? "Pause" : "Start";
+      el("toggle").hidden = done;
+      el("skip").hidden = done;
+    }
+
+    el("toggle").addEventListener("click", () => (timerId ? pause() : start()));
+    el("skip").addEventListener("click", advance);
+    el("reset").addEventListener("click", reset);
+    // The browser drops the wake lock when you switch tabs, so get it back.
+    document.addEventListener("visibilitychange", () => {
+      if (timerId && document.visibilityState === "visible") keepAwake();
+    });
+
+    reset();
+  </script>
+</body>
+</html>
